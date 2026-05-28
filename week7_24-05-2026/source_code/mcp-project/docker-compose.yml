@@ -63,8 +63,7 @@ services:
       - "8104:8000"
     environment:
       - AI_PROVIDER=groq
-      - AI_API_KEY=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
-
+      - AI_API_KEY=
 
     restart: unless-stopped
 
