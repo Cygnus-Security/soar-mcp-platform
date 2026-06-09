@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: soc-dss-postgres
+    command: ["postgres", "-c", "max_wal_size=4GB", "-c", "checkpoint_timeout=15min", "-c", "checkpoint_completion_target=0.9", "-c", "wal_compression=on"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-socdss}
+      POSTGRES_USER: ${POSTGRES_USER:-socdss}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-socdss_password}
+    volumes:
+      - ${POSTGRES_DATA_DIR:-./runtime/postgres/data}:/var/lib/postgresql/data
+      - ${POSTGRES_BACKUP_DIR:-./runtime/postgres/backups}:/backups
+    networks:
+      - socdss-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-socdss} -d ${POSTGRES_DB:-socdss}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../../backend
+      dockerfile: Dockerfile
+    container_name: soc-dss-backend
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${POSTGRES_DB:-socdss}
+      DB_USER: ${POSTGRES_USER:-socdss}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:-socdss_password}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:-strict}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ${BACKEND_LOG_DIR:-./runtime/backend/logs}:/app/logs
+      - ${REPORT_OUTPUT_DIR:-./runtime/reports}:/app/reports
+    networks:
+      - socdss-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../../frontend
+      dockerfile: Dockerfile
+    container_name: soc-dss-frontend
+    ports:
+      - "8090:80"
+    depends_on:
+      - backend
+    volumes:
+      - ${FRONTEND_LOG_DIR:-./runtime/frontend/logs}:/var/log/nginx
+    networks:
+      - socdss-net
+    restart: unless-stopped
+
+networks:
+  socdss-net:
+    driver: bridge
