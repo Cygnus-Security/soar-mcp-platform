@@ -1,0 +1,8 @@
+.env
+data/ip_since.json
+reports/
+__pycache__/
+*.pyc
+*.pyo
+mcp_servers/*/___pycache__/
+mcp_host/app/__pycache__/

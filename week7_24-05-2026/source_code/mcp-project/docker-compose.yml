@@ -1,9 +1,7 @@
 services:
-
   #################################################
   # MCP COLLECTOR SERVER
   #################################################
-
   collector_server:
     build:
       context: ./mcp_servers/collector_server
@@ -15,13 +13,11 @@ services:
       - "8101:8000"
     volumes:
       - /home/kali/my-lab/infra/volumes/shared_logs/dvwa:/shared_logs:ro
-
     restart: unless-stopped
 
   #################################################
   # MCP TRANSLATOR SERVER
   #################################################
-
   translator_server:
     build:
       context: ./mcp_servers/translator_server
@@ -36,7 +32,6 @@ services:
   #################################################
   # MCP CORRELATOR SERVER
   #################################################
-
   correlator_server:
     build:
       context: ./mcp_servers/correlator_server
@@ -51,7 +46,6 @@ services:
   #################################################
   # MCP REASONING SERVER
   #################################################
-
   reasoning_server:
     build:
       context: ./mcp_servers/reasoning_server
@@ -63,15 +57,12 @@ services:
       - "8104:8000"
     environment:
       - AI_PROVIDER=groq
-      - AI_API_KEY=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
-
-
+      - AI_API_KEY=${AI_API_KEY}
     restart: unless-stopped
 
   #################################################
   # MCP RESPONSE SERVER
   #################################################
-
   response_server:
     build:
       context: ./mcp_servers/response_server
@@ -81,12 +72,36 @@ services:
       - backend_net
     ports:
       - "8105:8000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - FIREWALL_AGENT_URL=http://172.17.0.1:9999
+      - APPROVAL_TIMEOUT=900
+      - DSS_URL=${DSS_URL:-http://172.17.0.1:8090}
+      - DSS_USERNAME=${DSS_USERNAME:-admin}
+      - DSS_PASSWORD=${DSS_PASSWORD}
+    volumes:
+      - ./reports:/reports
+    restart: unless-stopped
+
+  #################################################
+  # FIREWALL AGENT
+  # Chạy trên host network để có quyền iptables
+  #################################################
+  firewall_agent:
+    build:
+      context: ./firewall_agent
+      dockerfile: Dockerfile
+    container_name: mcp_firewall_agent
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     restart: unless-stopped
 
   #################################################
   # HOST ORCHESTRATOR
   #################################################
-
   soar_host:
     build:
       context: ./mcp_host
@@ -100,8 +115,12 @@ services:
       - correlator_server
       - reasoning_server
       - response_server
+      - firewall_agent
     volumes:
       - ./data:/tmp/soar_data
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     restart: unless-stopped
 
 networks:

@@ -80,6 +80,7 @@ Return ONLY valid JSON, no markdown:
   "verdict": "attack_confirmed" | "probe_detected" | "suspicious" | "benign",
   "risk_summary": "brief label",
   "behavioral_pattern": "pattern observed",
+  "attack_type": "EXACTLY ONE of: sqli, xss, lfi, cmdi, rfi, ssrf, brute_force, other — pick most dominant, or other if benign",
   "attack_chain": ["action1", "action2"],
   "recommended_action": ["block_ip", "session_invalidation", "monitor_closely", "manual_admin_review", "no_action"],
   "recommendation": "primary action",
@@ -113,6 +114,10 @@ Risk: {metrics.get('session_risk', 0):.1f}/100
 Attack Chain:
 {chain_text}
 
+IMPORTANT: For "attack_type", you MUST pick EXACTLY ONE value from this list:
+sqli, xss, lfi, cmdi, rfi, ssrf, brute_force, other
+Pick the MOST DOMINANT attack type. Do NOT combine with | or +.
+
 Return ONLY valid JSON, no markdown:
 {{
   "is_real_attack": true,
@@ -121,7 +126,7 @@ Return ONLY valid JSON, no markdown:
   "confidence": 0.95,
   "verdict": "attack_confirmed",
   "risk_summary": "brief label",
-  "attack_type": "sqli | xss | lfi | cmdi | rfi | ssrf | brute_force | other",
+  "attack_type": "EXACTLY ONE of: sqli, xss, lfi, cmdi, rfi, ssrf, brute_force, other",
   "attack_chain": ["step1", "step2"],
   "impact_assessment": "what was potentially compromised",
   "recommended_action": ["block_ip", "session_invalidation", "telegram_alert", "patch_required"],

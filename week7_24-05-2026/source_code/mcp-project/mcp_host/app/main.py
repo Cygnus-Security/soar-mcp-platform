@@ -2,21 +2,29 @@ import asyncio
 import json
 import time
 import pathlib
+import os
+import requests
 from datetime import datetime, timezone, timedelta
 from app.wazuh_client import WazuhClient
 from app.orchestrator import SOAROrchestrator
 
-POLL_INTERVAL    = 15
-WEB_LOG_INTERVAL = 15
-SINCE_FILE       = pathlib.Path("/tmp/soar_data/ip_since.json")
-VN_TZ            = timezone(timedelta(hours=7))
+POLL_INTERVAL        = 15
+WEB_LOG_INTERVAL     = 15
+TELEGRAM_POLL_INTERVAL = 5   # poll Telegram callback mỗi 5 giây
+SINCE_FILE           = pathlib.Path("/tmp/soar_data/ip_since.json")
+VN_TZ                = timezone(timedelta(hours=7))
 
-# Map tháng viết tắt để convert UTC log timestamp sang datetime
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_API       = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
 _MONTH_MAP = {
     "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4,
     "May": 5, "Jun": 6, "Jul": 7, "Aug": 8,
     "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12
 }
+
+# Track update_id Telegram đã xử lý
+_last_update_id = 0
 
 
 def load_ip_since() -> dict:
@@ -35,10 +43,6 @@ def save_ip_since(ip_since: dict):
 
 
 def log_ts_to_vn(ts_str: str) -> str:
-    """
-    Convert log timestamp "18/May/2026:17:11:15 +0000" → "19/05 00:11:15 VN"
-    để dễ đọc hơn khi hiển thị.
-    """
     try:
         ts = ts_str.split(" ")[0]
         day, mon_str, rest = ts.split("/")
@@ -56,10 +60,6 @@ def log_ts_to_vn(ts_str: str) -> str:
 
 
 def ts_newer(new_ts: str, old_ts: str) -> bool:
-    """
-    So sánh 2 timestamp string dạng "18/May/2026:17:11:15 +0000".
-    Trả True nếu new_ts mới hơn old_ts.
-    """
     def parse(ts):
         try:
             ts = ts.split(" ")[0]
@@ -73,7 +73,6 @@ def ts_newer(new_ts: str, old_ts: str) -> bool:
 
 
 async def get_active_ips_from_web_log(orchestrator: SOAROrchestrator) -> set:
-    """Lấy IP active từ collector MCP."""
     try:
         result = await orchestrator._call(
             orchestrator.collector_mcp,
@@ -94,6 +93,66 @@ async def get_active_ips_from_web_log(orchestrator: SOAROrchestrator) -> set:
         return set()
 
 
+async def poll_telegram_callbacks(orchestrator: SOAROrchestrator):
+    """
+    Poll Telegram getUpdates để nhận callback từ inline keyboard.
+    Khi admin nhấn APPROVE/REJECT → gọi handle_telegram_callback trên response MCP.
+    """
+    global _last_update_id
+    if not TELEGRAM_BOT_TOKEN:
+        return
+
+    try:
+        r = requests.get(
+            f"{TELEGRAM_API}/getUpdates",
+            params={"offset": _last_update_id + 1, "timeout": 0},
+            timeout=10
+        )
+        data = r.json()
+        if not data.get("ok"):
+            return
+
+        for update in data.get("result", []):
+            _last_update_id = update["update_id"]
+
+            # Chỉ xử lý callback_query (inline keyboard)
+            callback = update.get("callback_query")
+            if not callback:
+                continue
+
+            callback_data = callback.get("data", "")
+            message_id    = callback.get("message", {}).get("message_id")
+
+            if not callback_data or not message_id:
+                continue
+
+            # Trả lời callback để Telegram bỏ loading spinner
+            try:
+                requests.post(f"{TELEGRAM_API}/answerCallbackQuery",
+                              json={"callback_query_id": callback["id"]},
+                              timeout=5)
+            except Exception:
+                pass
+
+            # Gọi response MCP xử lý
+            try:
+                result = await orchestrator._call(
+                    orchestrator.response_mcp,
+                    "handle_telegram_callback",
+                    {"callback_data": callback_data, "message_id": message_id}
+                )
+                action = result.get("status", "unknown")
+                ip     = result.get("ip", "?")
+                print(f"\n[TELEGRAM CALLBACK] {action.upper()} for {ip}")
+                if result.get("block_result"):
+                    print(f"  block_result: {result['block_result']}")
+            except Exception as e:
+                print(f"[TELEGRAM CALLBACK ERROR] {e}")
+
+    except Exception:
+        pass
+
+
 async def main():
     import time as _time
     _time.sleep(5)
@@ -111,9 +170,11 @@ async def main():
     print("[+] SOAR Host started — Dual trigger mode")
     print("[+] Trigger 1: Wazuh alerts (real-time attack detection)")
     print("[+] Trigger 2: Web log polling (behavioral chain monitoring)")
+    print("[+] Trigger 3: Telegram callback polling (human-in-the-loop)")
     print()
 
-    last_web_poll = 0.0
+    last_web_poll      = 0.0
+    last_telegram_poll = 0.0
 
     while True:
         # ══════════════════════════════════════════════════════════════════
@@ -157,9 +218,8 @@ async def main():
                     processed_web_ips[ip] = now
                     since = ip_since.get(ip, {})
 
-                    # Hiển thị since theo giờ VN cho dễ đọc
                     if since:
-                        web_since = since.get("web", "")
+                        web_since     = since.get("web", "")
                         since_display = log_ts_to_vn(web_since) if web_since else "unknown"
                         print(f"[~] WEB LOG TRIGGER: {ip} (since={since_display})")
                     else:
@@ -167,7 +227,6 @@ async def main():
 
                     result = await orchestrator.process_web_ip(ip, since=since)
 
-                    # Chỉ update ip_since khi timestamp MỚI HƠN timestamp cũ
                     new_timestamps = result.get("last_timestamps", {})
                     if new_timestamps:
                         if ip not in ip_since:
@@ -182,7 +241,6 @@ async def main():
 
                     _print_result(result)
 
-                # Cleanup IP cũ hơn 30 phút
                 cutoff = now - 1800
                 processed_web_ips = {ip: t for ip, t in processed_web_ips.items() if t > cutoff}
                 ip_since = {ip: s for ip, s in ip_since.items()
@@ -190,6 +248,14 @@ async def main():
 
             except Exception as e:
                 print(f"[WEB LOG ERROR] {e}")
+
+        # ══════════════════════════════════════════════════════════════════
+        # TRIGGER 3 — Telegram callback polling
+        # ══════════════════════════════════════════════════════════════════
+        now = time.time()
+        if now - last_telegram_poll >= TELEGRAM_POLL_INTERVAL:
+            last_telegram_poll = now
+            await poll_telegram_callbacks(orchestrator)
 
         await asyncio.sleep(POLL_INTERVAL)
 
@@ -237,6 +303,13 @@ def _print_result(result: dict):
         if plan:
             print("\n[SOAR RESPONSE PLAN]")
             print(json.dumps(plan, indent=2, ensure_ascii=False))
+        approval = plan.get("approval_result", {}) if plan else {}
+        if approval:
+            status_str = approval.get("status", "")
+            if status_str == "pending_approval":
+                print(f"\n[⏳] Chờ admin phê duyệt — timeout 15 phút sẽ tự động execute")
+            elif status_str == "already_blocked":
+                print(f"\n[🚫] IP đã bị block trong session này — skip")
         print(f"\n[!] SUSPICIOUS ACTIVITY — Report sent to admin for {source_ip}\n")
         return
 

@@ -21,6 +21,7 @@ class SOAROrchestrator:
         self.collector_mcp   = MCPClient("http://collector_server:8000")
         self.translator_mcp  = MCPClient("http://translator_server:8000")
         self.correlator_mcp  = MCPClient("http://correlator_server:8000")
+        self.response_mcp    = MCPClient("http://response_server:8000")
         self.ai_engine       = AIEngine()
         self.response_engine = ResponseEngine()
 
@@ -129,6 +130,17 @@ class SOAROrchestrator:
             except Exception:
                 pass
 
+            # Generate incident report
+            try:
+                await self._call(self.response_mcp, "generate_incident_report", {
+                    "source_ip":        source_ip,
+                    "ai_result":        json.dumps(ai_result),
+                    "pipeline_summary": json.dumps(pipeline_summary),
+                    "mode":             "wazuh"
+                })
+            except Exception:
+                pass
+
             return {
                 "alert_id": alert_id, "source_ip": source_ip,
                 "url": url, "rule_description": rule_description,
@@ -171,6 +183,17 @@ class SOAROrchestrator:
                 response_plan = await self.response_engine.generate_response_plan(ai_result)
             except Exception as e:
                 response_plan = {"error": str(e), "actions": []}
+
+            # Generate incident report
+            try:
+                await self._call(self.response_mcp, "generate_incident_report", {
+                    "source_ip":        source_ip,
+                    "ai_result":        json.dumps(ai_result),
+                    "pipeline_summary": json.dumps(pipeline_summary),
+                    "mode":             "behavioral"
+                })
+            except Exception:
+                pass
 
             return {
                 "alert_id": alert_id, "source_ip": source_ip, "url": url,

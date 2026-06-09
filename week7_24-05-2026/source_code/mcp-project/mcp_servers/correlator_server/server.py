@@ -79,7 +79,7 @@ THRESHOLD_RISK   = 40
 TIMEOUT_SEC      = 1800
 FLUSH_LOCK_SEC   = 2
 FLUSH_WINDOW_SEC = 60
-FLUSH_MAX        = 5
+FLUSH_MAX        = 50
 
 _missing_label = set(RISK_MAP) - set(BEHAVIOR_LABEL)
 _missing_risk  = set(BEHAVIOR_LABEL) - set(RISK_MAP)
