@@ -18,6 +18,7 @@ class KafkaBridge:
     def __init__(self):
         brokers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
         self.normalized_topic = os.getenv("KAFKA_NORMALIZED_TOPIC", "soc.normalized.v1")
+        self.raw_topic = os.getenv("KAFKA_RAW_TOPIC", "soc.raw.v1")
         self.action_topic = os.getenv("KAFKA_APPROVED_ACTION_TOPIC", "soc.action-approved.v1")
         self.result_topic = os.getenv("KAFKA_ACTION_RESULT_TOPIC", "soc.action-result.v1")
         self.tenant_id = os.getenv("SOAR_TENANT_ID", "lab")
@@ -84,6 +85,34 @@ class KafkaBridge:
                 },
             }
             self.producer.send(self.normalized_topic, key=f"{self.tenant_id}:{source_ip}", value=normalized)
+            published += 1
+        self.producer.flush(timeout=10)
+        return published
+
+    def publish_raw_events(self, events: list[dict], ingestion_mode: str = "realtime"):
+        if not self.enabled or not self.producer:
+            return 0
+        published = 0
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        for index, event in enumerate(events):
+            source = str(event.get("source") or "application").lower()
+            fingerprint = json.dumps(event, sort_keys=True, default=str)
+            cursor = hashlib.sha256(fingerprint.encode("utf-8")).hexdigest()
+            envelope = {
+                "schema_version": "1.0",
+                "ingestion_id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{self.tenant_id}:{source}:{cursor}")),
+                "tenant_id": self.tenant_id,
+                "source_product": source,
+                "ingestion_mode": ingestion_mode,
+                "received_at": now,
+                "content_type": "application/json",
+                "source_file": None,
+                "source_offset": index,
+                "connector_id": "mcp-collector",
+                "source_cursor": cursor,
+                "payload": event,
+            }
+            self.producer.send(self.raw_topic, key=cursor, value=envelope)
             published += 1
         self.producer.flush(timeout=10)
         return published

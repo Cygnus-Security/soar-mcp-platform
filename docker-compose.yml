@@ -1,5 +1,72 @@
 services:
 
+  ingestion_gateway:
+    build:
+      context: ./ingestion_gateway
+      dockerfile: Dockerfile
+    container_name: soar_ingestion_gateway
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    environment: &ingestion_environment
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:9092}
+      SOAR_TENANT_ID: ${SOAR_TENANT_ID:-lab}
+      INGESTION_API_TOKEN: ${INGESTION_API_TOKEN:-}
+      CHECKPOINT_DB: /app/data/checkpoints.sqlite3
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./runtime/ingestion:/app/data
+    networks:
+      - socdss_net
+    restart: unless-stopped
+
+  normalizer_worker:
+    build:
+      context: ./ingestion_gateway
+      dockerfile: Dockerfile
+    container_name: soar_normalizer_worker
+    command: ["python", "-u", "-m", "app.worker"]
+    environment: *ingestion_environment
+    networks:
+      - socdss_net
+    restart: unless-stopped
+
+  syslog_receiver:
+    build:
+      context: ./ingestion_gateway
+      dockerfile: Dockerfile
+    container_name: soar_syslog_receiver
+    command: ["python", "-u", "-m", "app.syslog_receiver"]
+    environment:
+      <<: *ingestion_environment
+      SYSLOG_SOURCE_PRODUCT: ${SYSLOG_SOURCE_PRODUCT:-generic_syslog}
+      SYSLOG_PORT: 5514
+    ports:
+      - "5514:5514/tcp"
+      - "5514:5514/udp"
+    networks:
+      - socdss_net
+    restart: unless-stopped
+
+  wazuh_poller:
+    profiles: ["wazuh"]
+    build:
+      context: ./ingestion_gateway
+      dockerfile: Dockerfile
+    container_name: soar_wazuh_poller
+    command: ["python", "-u", "-m", "app.wazuh_poller"]
+    environment:
+      <<: *ingestion_environment
+      WAZUH_INDEXER_URL: ${WAZUH_INDEXER_URL:-https://wazuh.indexer:9200}
+      WAZUH_INDEXER_USER: ${WAZUH_INDEXER_USER:-admin}
+      WAZUH_INDEXER_PASSWORD: ${WAZUH_INDEXER_PASSWORD:-}
+      WAZUH_VERIFY_TLS: ${WAZUH_VERIFY_TLS:-true}
+    volumes:
+      - ./runtime/ingestion:/app/data
+    networks:
+      - backend_net
+      - socdss_net
+    restart: unless-stopped
+
   #################################################
   # MCP COLLECTOR SERVER
   #################################################

@@ -46,6 +46,38 @@ The host also publishes normalized `SecurityEvent v1` records to Redpanda and co
 
 The MCP servers use SSE transport and listen on port `8000` inside the Docker network.
 
+## Dual-Path Data Ingestion
+
+Both live telemetry and existing datasets enter the same raw topic and use the same normalizer:
+
+```text
+Wazuh / IDS / IPS / Syslog / HTTP webhook ─┐
+                                           ├─> soc.raw.v1 -> normalizer -> soc.normalized.v1
+JSON / JSONL / CSV / archived log upload ──┘
+```
+
+The ingestion gateway is exposed on port `8090`:
+
+```text
+POST /v1/events
+POST /v1/events/batch
+POST /v1/files?source_product=suricata&mode=accelerated&speed=50
+```
+
+Existing files can also be replayed from the ingestion image:
+
+```bash
+python -m app.replay --input /data/eve.json --source suricata --mode accelerated --speed 50
+```
+
+Syslog TCP and UDP listen on port `5514`. The optional `wazuh_poller` profile reads Wazuh Indexer incrementally with a persistent `search_after` checkpoint:
+
+```bash
+docker compose --profile wazuh up --build -d
+```
+
+Supported source mappings include Wazuh, Suricata EVE JSON, Snort text alerts, Zeek JSON/native TSV logs, web logs, authentication logs, firewall logs, generic Syslog, JSON/JSONL and CSV. File replay stores a dataset checkpoint in SQLite, so retrying the same dataset does not resend completed records unless `resume=false` is requested.
+
 ## Processing Flows
 
 ### Branch A — Wazuh Alert

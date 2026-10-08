@@ -47,6 +47,12 @@ class SOAROrchestrator:
         if not raw_events:
             return {"alert_id": alert_id, "source_ip": source_ip, "status": "no_events_collected"}
 
+        try:
+            published_events = self.kafka_bridge.publish_raw_events(raw_events)
+        except Exception as e:
+            published_events = 0
+            print(f"[KAFKA] Failed to publish raw events: {e}")
+
         # ── STEP 2: TRANSLATE ─────────────────────────────────────────────
         try:
             translate_result = await self._call(
@@ -64,14 +70,6 @@ class SOAROrchestrator:
                 "status": "no_behaviors_detected",
                 "skipped_count": translate_result.get("skipped_count", 0)
             }
-
-        try:
-            published_events = self.kafka_bridge.publish_translated_events(
-                translated_events, source_ip, source_ip
-            )
-        except Exception as e:
-            published_events = 0
-            print(f"[KAFKA] Failed to publish normalized events: {e}")
 
         # ── STEP 3: CORRELATE ─────────────────────────────────────────────
         try:
@@ -108,7 +106,7 @@ class SOAROrchestrator:
             "session_stage":     session_stage,
             "session_risk":      correlation_result.get("current_risk", 0),
             "trigger_source":    trigger_source,
-            "normalized_events_published": published_events,
+            "raw_events_published": published_events,
         }
 
         # ══════════════════════════════════════════════════════════════════
