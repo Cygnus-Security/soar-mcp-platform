@@ -2,7 +2,7 @@
 
 An experimental **Security Orchestration, Automation, and Response (SOAR)** platform that uses the Model Context Protocol (MCP) to collect logs, normalize behavior, correlate events, perform AI-assisted analysis, and generate incident response plans.
 
-> This project is a research prototype. Actions such as blocking an IP address, isolating a container, or sending an alert are currently represented in response results. The platform does not yet include executors that apply these actions to a firewall, Docker environment, Telegram, or ticketing system.
+> This project is a research prototype. Response execution defaults to `dry-run`. Live execution requires an explicitly configured action-gateway webhook; the SOAR service never runs arbitrary shell commands from an event.
 
 ## Architecture
 
@@ -41,6 +41,8 @@ The platform consists of six services:
 | `reasoning_server` | 8104 | Analyzes behavioral chains through a configured AI provider |
 | `response_server` | 8105 | Generates response plans or describes active-response actions |
 | `soar_host` | — | Polls data sources and orchestrates the MCP services |
+
+The host also publishes normalized `SecurityEvent v1` records to Redpanda and consumes approved actions from SOC-DSS. Approval tokens are signed by SOC-DSS, expire after a short TTL, and are verified by the response service before execution.
 
 The MCP servers use SSE transport and listen on port `8000` inside the Docker network.
 
@@ -171,6 +173,19 @@ export AI_API_KEY="your-api-key"
 ```
 
 When no API key is configured, the reasoning server returns an `analysis_failed` result instead of calling a provider.
+
+### 5. SOC-DSS and Response Execution
+
+Use the same approval secret in both platforms and enable the Kafka bridge:
+
+```text
+SOAR_KAFKA_ENABLED=true
+KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
+ACTION_APPROVAL_SECRET=<at-least-32-random-characters>
+SOAR_EXECUTION_MODE=dry-run
+```
+
+For live execution, set `SOAR_EXECUTION_MODE=live` and configure `SOAR_ACTION_WEBHOOK_URL`. The gateway receives an action ID, allowlisted action type, target, and context. A non-2xx response is reported to DSS as `FAILED`.
 
 ## Starting the Platform
 

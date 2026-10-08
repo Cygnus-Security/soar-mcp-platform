@@ -80,6 +80,15 @@ services:
       - backend_net
     ports:
       - "8105:8000"
+    environment:
+      ACTION_APPROVAL_SECRET: ${ACTION_APPROVAL_SECRET:-change-this-development-secret-32-characters}
+      SOAR_EXECUTION_MODE: ${SOAR_EXECUTION_MODE:-dry-run}
+      SOAR_ACTION_ALLOWLIST: ${SOAR_ACTION_ALLOWLIST:-temporary_ip_block,rate_limit_ip,session_invalidation,increase_monitoring,create_ticket}
+      SOAR_AUTO_ACTION_ALLOWLIST: ${SOAR_AUTO_ACTION_ALLOWLIST:-rate_limit_ip,increase_monitoring,create_ticket}
+      SOAR_ACTION_WEBHOOK_URL: ${SOAR_ACTION_WEBHOOK_URL:-}
+      SOAR_ACTION_WEBHOOK_TOKEN: ${SOAR_ACTION_WEBHOOK_TOKEN:-}
+    volumes:
+      - ./runtime/response:/app/data
     restart: unless-stopped
 
   #################################################
@@ -93,14 +102,22 @@ services:
     container_name: mcp_soar_host
     networks:
       - backend_net
+      - socdss_net
     depends_on:
       - collector_server
       - translator_server
       - correlator_server
       - reasoning_server
       - response_server
+    environment:
+      SOAR_KAFKA_ENABLED: ${SOAR_KAFKA_ENABLED:-true}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS:-redpanda:9092}
+      SOAR_TENANT_ID: ${SOAR_TENANT_ID:-lab}
     restart: unless-stopped
 
 networks:
   backend_net:
     external: true
+  socdss_net:
+    external: true
+    name: socdss-net

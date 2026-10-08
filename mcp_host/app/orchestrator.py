@@ -2,6 +2,7 @@ import json
 from app.mcp_client import MCPClient
 from app.ai_engine import AIEngine
 from app.response_engine import ResponseEngine
+from app.kafka_bridge import KafkaBridge
 
 
 class SOAROrchestrator:
@@ -21,6 +22,7 @@ class SOAROrchestrator:
         self.correlator_mcp  = MCPClient("http://correlator_server:8000")
         self.ai_engine       = AIEngine()
         self.response_engine = ResponseEngine()
+        self.kafka_bridge     = KafkaBridge()
 
     async def _call(self, client: MCPClient, tool: str, payload: dict) -> dict:
         result = await client.call_tool(tool, payload)
@@ -63,6 +65,14 @@ class SOAROrchestrator:
                 "skipped_count": translate_result.get("skipped_count", 0)
             }
 
+        try:
+            published_events = self.kafka_bridge.publish_translated_events(
+                translated_events, source_ip, source_ip
+            )
+        except Exception as e:
+            published_events = 0
+            print(f"[KAFKA] Failed to publish normalized events: {e}")
+
         # ── STEP 3: CORRELATE ─────────────────────────────────────────────
         try:
             correlation_result = await self._call(
@@ -98,6 +108,7 @@ class SOAROrchestrator:
             "session_stage":     session_stage,
             "session_risk":      correlation_result.get("current_risk", 0),
             "trigger_source":    trigger_source,
+            "normalized_events_published": published_events,
         }
 
         # ══════════════════════════════════════════════════════════════════
@@ -112,6 +123,11 @@ class SOAROrchestrator:
                 )
             except Exception as e:
                 immediate_response = {"error": str(e), "actions": []}
+
+            try:
+                self.kafka_bridge.publish_automatic_results(source_ip, immediate_response)
+            except Exception as e:
+                print(f"[KAFKA] Failed to publish automatic response results: {e}")
 
             try:
                 ai_result = await self.ai_engine.analyze_confirmed_attack(
@@ -186,6 +202,15 @@ class SOAROrchestrator:
             "ai_reasoning": ai_result.get("reasoning", ""),
             "forensic_note": "Queue retained 30 minutes for investigation if needed",
         }
+
+    async def process_approved_actions(self):
+        requests = self.kafka_bridge.poll_approved_actions()
+        for request in requests:
+            result = await self.response_engine.execute_approved_action(request)
+            self.kafka_bridge.publish_action_result(request, result)
+        if requests:
+            self.kafka_bridge.commit_actions()
+        return len(requests)
 
     async def process_alert(self, alert: dict) -> dict:
         """

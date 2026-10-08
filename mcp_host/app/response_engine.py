@@ -36,3 +36,13 @@ class ResponseEngine:
             return json.loads(result) if isinstance(result, str) else result
         except Exception as e:
             return {"status": "failed", "reason": str(e), "actions": []}
+
+    async def execute_approved_action(self, request: dict) -> dict:
+        try:
+            result = await self.response_mcp.call_tool(
+                "execute_approved_action",
+                {"action_request": json.dumps(request)}
+            )
+            return json.loads(result) if isinstance(result, str) else result
+        except Exception as e:
+            return {"status": "FAILED", "message": str(e)}

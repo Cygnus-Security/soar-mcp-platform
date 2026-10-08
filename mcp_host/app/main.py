@@ -51,6 +51,13 @@ async def main():
     last_web_poll = 0.0
 
     while True:
+        try:
+            processed_actions = await orchestrator.process_approved_actions()
+            if processed_actions:
+                print(f"[ACTION] Processed {processed_actions} approved action(s)")
+        except Exception as e:
+            print(f"[ACTION ERROR] {e}")
+
         # ══════════════════════════════════════════════════════════════════
         # TRIGGER 1 — Wazuh alert (poll mỗi 10s)
         # ══════════════════════════════════════════════════════════════════
