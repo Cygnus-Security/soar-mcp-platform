@@ -168,11 +168,11 @@ Skip this command if the network already exists.
 
 ### 2. Log Volume
 
-Update the host path in `docker-compose.yml` for the target environment:
+Set `SOAR_SHARED_LOG_DIR` for the target environment. It defaults to `./runtime/shared_logs`:
 
 ```yaml
 volumes:
-  - /path/to/shared_logs:/shared_logs:ro
+  - ${SOAR_SHARED_LOG_DIR:-./runtime/shared_logs}:/shared_logs:ro
 ```
 
 The collector reads log sources below `/shared_logs`. The actual directory structure and file names must match the paths defined in `mcp_servers/collector_server/server.py`.

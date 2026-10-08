@@ -81,7 +81,7 @@ services:
     ports:
       - "8101:8000"
     volumes:
-      - /home/kali/my-lab/infra/volumes/shared_logs/dvwa:/shared_logs:ro
+      - ${SOAR_SHARED_LOG_DIR:-./runtime/shared_logs}:/shared_logs:ro
 
     restart: unless-stopped
 
