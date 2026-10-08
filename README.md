@@ -1,312 +1,270 @@
-# 🔐 CyberSec Internship - Weekly Reporting
+# SOAR MCP Platform
 
-This repository is used to manage, track, and review weekly progress reports for all internship members.
+An experimental **Security Orchestration, Automation, and Response (SOAR)** platform that uses the Model Context Protocol (MCP) to collect logs, normalize behavior, correlate events, perform AI-assisted analysis, and generate incident response plans.
 
----
+> This project is a research prototype. Actions such as blocking an IP address, isolating a container, or sending an alert are currently represented in response results. The platform does not yet include executors that apply these actions to a firewall, Docker environment, Telegram, or ticketing system.
 
-## 🎯 Objectives
+## Architecture
 
-- Ensure consistent **weekly reporting**
-- Track individual progress via **GitHub**
-- Build structured content that can be combined into a final report
+```text
+Wazuh Indexer ───────────────┐
+                            │
+Web/Auth/DB/Audit/Firewall ─┴─> Collector MCP
+                                      │
+                                      v
+                                Translator MCP
+                                      │
+                                      v
+                                Correlator MCP
+                                      │
+                         ┌────────────┴────────────┐
+                         │                         │
+                   Wazuh confirmed          Behavioral chain
+                         │                         │
+                         v                         v
+                  Immediate response         AI Reasoning MCP
+                         │                         │
+                         └────────────┬────────────┘
+                                      v
+                                 Response MCP
 
----
-
-## 📌 General Rules
-
-- Each member must submit **exactly ONE report per week**
-- All submissions must be pushed to **GitHub**
-- Follow **naming conventions strictly**
-- Each report should be written in a **clear and reusable format**
-
----
-
-## 🌿 Branch Management
-
-Each member must work on their **own branch**
-
-### 📛 Naming Convention
-```
-<full-name-no-accent>
-```
-
-### ✅ Examples
-```
-tran-van-a
-nguyen-duc-minh
+                     MCP Host orchestrates the pipeline
 ```
 
-### ❗ Rules
-- Use lowercase
-- Replace spaces with `-`
-- Do NOT use Vietnamese accents
-- Do NOT commit directly to `main`
+The platform consists of six services:
 
----
+| Service | Host port | Responsibility |
+|---|---:|---|
+| `collector_server` | 8101 | Collects Wazuh alerts and logs from local sources |
+| `translator_server` | 8102 | Normalizes logs and identifies security-related behavior |
+| `correlator_server` | 8103 | Groups session events, calculates risk, and determines the attack stage |
+| `reasoning_server` | 8104 | Analyzes behavioral chains through a configured AI provider |
+| `response_server` | 8105 | Generates response plans or describes active-response actions |
+| `soar_host` | — | Polls data sources and orchestrates the MCP services |
 
-## 📅 Weekly Folder Structure
+The MCP servers use SSE transport and listen on port `8000` inside the Docker network.
 
-### 📛 Format
-```
-week<week_number>_<dd-mm-yyyy>
-```
+## Processing Flows
 
-### ✅ Example
-```
-week1_27-03-2026
-```
+### Branch A — Wazuh Alert
 
----
+1. The host polls Wazuh for a new alert every 10 seconds.
+2. The collector retrieves related data from all available sources.
+3. The translator converts raw logs into behavioral events.
+4. The correlator accumulates events, calculates risk, and builds an attack story.
+5. When the payload contains a Wazuh alert, the system selects the `wazuh_confirmed` branch.
+6. The response server generates immediate-response actions while the reasoning server creates an incident report.
 
-## 📄 Report Naming Convention
+### Branch B — Behavioral Analysis
 
-### 📛 Format
-```
-week<week>_<topic>_<tool>.pdf
-```
+1. The host scans web logs every 30 seconds for active source IP addresses.
+2. The collector retrieves web, authentication, database, audit, container, and firewall logs without querying Wazuh alerts.
+3. The translator identifies both normal and malicious behavior.
+4. The correlator sends the behavioral chain to the AI service when any of these conditions is met:
+   - At least 30 events have accumulated.
+   - The risk score is 40 or higher.
+   - At least two distinct attack behaviors are present.
+   - The session has been inactive for 30 minutes.
+5. If the AI service classifies the activity as suspicious, the response server creates a plan for administrator review.
 
-### ✅ Examples
-```
-week1_api-testing_crapi.pdf
-week2_ids_wazuh.pdf
-week3_rag_qwen.pdf
-```
+## Detection Capabilities
 
----
+The translator currently includes rules for detecting:
 
-## 📂 Required Contents
+- SQL injection and authentication bypass attempts.
+- Local and remote file inclusion.
+- Command injection and reverse shells.
+- Cross-site scripting.
+- Server-side request forgery.
+- Webshell execution.
+- SSH brute-force attempts and user enumeration.
+- Privilege escalation.
+- Port scans and access to sensitive paths.
+- High-severity Wazuh alerts.
+- Normal web behavior such as browsing, login, API calls, searches, and form submissions.
 
-Each weekly folder MUST include:
+Input is URL-decoded, converted to lowercase, and normalized for selected encoding and comment patterns before the detection rules are applied.
 
-- `report.pdf` (main report - required)
-- `report_<topic>.pdf` (optional readable version)
-- `source_code/` (code, configs, scripts)
-- `notes.md` (optional)
+## Repository Structure
 
----
-
-## 🧠 Structured Reporting (IMPORTANT)
-
-Each weekly report should be written in a way that:
-
-- Can stand alone as a weekly progress report
-- Can be **combined later into a final report/document**
-
-👉 This means:
-- Write clearly and formally
-- Avoid personal/journal-style writing
-- Focus on reusable technical content
-
----
-
-## 📘 Weekly Report Template (MUST FOLLOW)
-
-### 1. Contribution Scope
-- What part of the project this week contributes to
-
-### 2. Objective of This Week
-- ...
-
-### 3. Detailed Work
-#### 3.1 Description
-#### 3.2 Design / Method
-#### 3.3 Implementation
-
-### 4. Results / Output
-
-### 5. Analysis
-
-### 6. Issues & Fixes
-
-### 7. Reusable Content ⭐ (REQUIRED)
-- Write 1–2 pages in clear, formal style
-- This section should be reusable in final documentation
-
-### 8. Next Step
-
----
-
-## 🐙 GitHub Issue Workflow (REQUIRED)
-
-To ensure clear communication and tracking, all tasks must be managed via **GitHub Issues**.
-
-### 📌 1. Each Task = One Issue
-
-Every task must be created as a separate issue.
-
-#### Naming format:
-```
-[Week X] <topic> - <short description>
+```text
+.
+├── docker-compose.yml
+├── mcp_host/
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── app/
+│       ├── main.py              # Dual-trigger polling loop
+│       ├── orchestrator.py      # Pipeline orchestration
+│       ├── mcp_client.py        # MCP SSE client
+│       ├── ai_engine.py         # Reasoning MCP client
+│       ├── response_engine.py   # Response MCP client
+│       ├── wazuh_client.py      # Wazuh Indexer polling
+│       └── config.py            # Prototype configuration
+├── mcp_servers/
+│   ├── collector_server/
+│   ├── translator_server/
+│   ├── correlator_server/
+│   ├── reasoning_server/
+│   └── response_server/
+└── test_pipeline.py             # Translator and correlator logic tests
 ```
 
----
+## Requirements
 
-### 📄 2. Issue Template
+- Docker Engine and Docker Compose.
+- A shared Docker network named `backend_net`.
+- A log directory that can be mounted read-only at `/shared_logs`.
+- A Wazuh Indexer accessible from `backend_net`.
+- An API key for a supported AI provider when AI reasoning is required.
 
-Each issue must follow this structure:
+The reasoning server supports `groq`, `gemini`, `claude`, and `openai`.
 
-```
-## 📌 Description
-What is this task about?
+## Configuration
 
-## 🎯 Objective
--
+### 1. Docker Network
 
-## 📂 Expected Output
--
+The Compose file uses an external network, so the network must exist before the services are started:
 
-## 🛠 Tools / Tech
--
-
-## ⏱ Deadline
--
-
-## 🔗 Related
-- Report folder:
-- PR:
-
-## 📝 Notes
--
+```bash
+docker network create backend_net
 ```
 
----
+Skip this command if the network already exists.
 
-### 📊 3. Work Log (REQUIRED)
+### 2. Log Volume
 
-All students MUST update progress directly in the issue using comments.
+Update the host path in `docker-compose.yml` for the target environment:
 
-#### 🔥 Format (mandatory):
-
-```
-### 📅 Day X (dd-mm)
-
-Time spent: Xh
-
-Work done:
-- 
-
-Result:
-- 
-
-Issue:
-- 
-
-Next:
-- 
+```yaml
+volumes:
+  - /path/to/shared_logs:/shared_logs:ro
 ```
 
-#### ❗ Rules:
+The collector reads log sources below `/shared_logs`. The actual directory structure and file names must match the paths defined in `mcp_servers/collector_server/server.py`.
 
-- MUST update every 1–2 days
-- MUST create new comment (do NOT edit old ones)
-- MUST include all fields
+### 3. Wazuh
 
-#### ❌ Invalid examples:
+Update the Wazuh URL and credentials in:
 
-```
-Did research
-```
+- `mcp_host/app/wazuh_client.py`
+- `mcp_host/app/config.py`
+- The `collector_server` environment variables when environment-based configuration is used.
 
----
+The values currently stored in the source are intended for a lab environment only. Do not commit real credentials to the repository.
 
-### 👤 4. Assignment & Labels
+### 4. AI Provider
 
-- Assign the issue to the responsible person
-- Use labels such as:
-  - `week1`, `week2`
-  - `api`, `ids`, `nginx`
-  - `review`, `urgent`
+Configure the provider and API key for `reasoning_server`:
 
----
-
-### 🔄 5. Workflow
-
-#### Intern:
-
-- Update work log regularly
-- Move card on Project Board
-- When done:
-
-```
-- Done
-- PR: #<number>
-- Report: <folder>
+```yaml
+reasoning_server:
+  environment:
+    AI_PROVIDER: groq
+    AI_API_KEY: ${AI_API_KEY}
 ```
 
-- Close the issue
+Export the secret from the shell or store it in an environment file that is excluded from version control:
 
----
-
-### 🔗 6. Linking (IMPORTANT)
-
-#### In commit:
-```
-git commit -m "week X: <task> (#issue_number)"
+```bash
+export AI_API_KEY="your-api-key"
 ```
 
-#### In PR:
-```
-Closes #issue_number
-```
+When no API key is configured, the reasoning server returns an `analysis_failed` result instead of calling a provider.
 
----
+## Starting the Platform
 
-## 🔄 Workflow (Git)
-
-```
-git checkout main
-git pull origin main
-git checkout <your-branch>
-git add .
-git commit -m "week X: report"
-git push origin <your-branch>
+```bash
+docker compose up --build -d
 ```
 
----
+Follow the host orchestrator logs:
 
-## 🚀 Submission Process
-
-- Create Pull Request → main
-- Title:
-```
-[Week X] Full Name - Topic
+```bash
+docker compose logs -f soar_host
 ```
 
----
+Check container status:
 
-## ⚠️ Important Notes
+```bash
+docker compose ps
+```
 
-- ❌ No direct commit to main
-- ❌ Missing report → reject
-- ❌ Wrong format → reject
-- ❌ No issue tracking → reject
-- ❌ No work log → reject
+Stop the platform:
 
-- ✅ Must include "Reusable Content"
-- ✅ Must link issue ↔ PR ↔ report
+```bash
+docker compose down
+```
 
----
+## MCP Tool Surface
 
-## ✅ Checklist
+### Collector
 
-- [ ] Correct branch
-- [ ] Correct folder name
-- [ ] Report file named correctly
-- [ ] Contains reusable content section
-- [ ] Issue created and updated
-- [ ] Work log updated
-- [ ] PR linked to issue
-- [ ] Pushed & PR created
+- `fetch_web_logs`
+- `fetch_container_logs`
+- `fetch_auth_logs`
+- `fetch_db_logs`
+- `fetch_audit_logs`
+- `fetch_firewall_logs`
+- `fetch_wazuh_alerts`
+- `fetch_all_sources`
 
----
+### Translator
 
-## 🏁 Final Note
+- `translate_behavior`
+- `translate_batch`
 
-Weekly reports are building blocks.
+### Correlator
 
-If written properly:
-👉 They can be combined later into a complete final document
+- `add_event`
+- `add_event_batch`
+- `update_ai_context`
+- `get_session_status`
+- `get_forensic_snapshot`
+- `list_active_sessions`
 
----
+### Reasoning
 
-Happy researching 🚀
+- `reason_about_attack`
+
+### Response
+
+- `generate_response`
+- `execute_active_response`
+
+## Logic Tests
+
+`test_pipeline.py` tests the translator and correlator with local fixtures. It includes the following scenarios:
+
+- `recon`
+- `sqli`
+- `lfi`
+- `brute`
+- `apt`
+- `noise_only`
+- `wazuh_passthrough`
+
+Examples:
+
+```bash
+python test_pipeline.py
+python test_pipeline.py -v
+python test_pipeline.py --scenario apt
+```
+
+These tests do not replace integration testing with Docker, MCP transport, Wazuh, or a real AI provider.
+
+## Current Status and Limitations
+
+- Active response currently generates a list of actions without applying infrastructure changes.
+- MCP endpoints do not yet have application-level authentication or TLS.
+- The correlator stores sessions in `/app/session_store.json`; the current Compose file does not mount a persistent volume for this file.
+- Sessions are identified primarily by source IP, which may be inaccurate in environments that use NAT or proxies.
+- Wazuh credentials and selected endpoints are configured directly for the lab environment.
+- Python dependency versions are not pinned.
+
+Do not connect this prototype directly to a production network or allow it to block or isolate resources automatically until authentication, secret management, audit logging, persistent storage, and an approval mechanism have been implemented.
+
+## License
+
+See [LICENSE](LICENSE).
