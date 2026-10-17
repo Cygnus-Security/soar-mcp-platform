@@ -215,7 +215,15 @@ SOAR_KAFKA_ENABLED=true
 KAFKA_BOOTSTRAP_SERVERS=redpanda:9092
 ACTION_APPROVAL_SECRET=<at-least-32-random-characters>
 SOAR_EXECUTION_MODE=dry-run
+SOAR_ACTION_BATCH_SIZE=50
+SOAR_ACTION_DELAY_MS=100
 ```
+
+`SOAR_ACTION_BATCH_SIZE` is clamped to 1–100. The host polls at most that many
+approved actions and awaits each execution before starting the next one.
+`SOAR_ACTION_DELAY_MS` adds a configurable pause between actions in the same
+batch. Use an approval-token TTL long enough for the slowest full batch; the
+SOC-DSS deployment default is 60 minutes.
 
 For live execution, set `SOAR_EXECUTION_MODE=live` and configure `SOAR_ACTION_WEBHOOK_URL`. The gateway receives an action ID, allowlisted action type, target, and context. A non-2xx response is reported to DSS as `FAILED`.
 

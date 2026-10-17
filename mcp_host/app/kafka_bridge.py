@@ -14,6 +14,14 @@ SOURCE_TYPES = {
 }
 
 
+def bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 class KafkaBridge:
     def __init__(self):
         brokers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "redpanda:9092")
@@ -23,6 +31,7 @@ class KafkaBridge:
         self.result_topic = os.getenv("KAFKA_ACTION_RESULT_TOPIC", "soc.action-result.v1")
         self.tenant_id = os.getenv("SOAR_TENANT_ID", "lab")
         self.enabled = os.getenv("SOAR_KAFKA_ENABLED", "false").lower() == "true"
+        self.action_batch_size = bounded_int_env("SOAR_ACTION_BATCH_SIZE", 50, 1, 100)
         self.producer = None
         self.consumer = None
         if self.enabled:
@@ -42,6 +51,8 @@ class KafkaBridge:
                 key_deserializer=lambda value: value.decode("utf-8") if value else None,
                 value_deserializer=lambda value: json.loads(value.decode("utf-8")),
                 consumer_timeout_ms=50,
+                max_poll_records=self.action_batch_size,
+                max_poll_interval_ms=1800000,
             )
 
     def publish_translated_events(self, events: list[dict], source_ip: str, session_id: str):
@@ -120,7 +131,7 @@ class KafkaBridge:
     def poll_approved_actions(self) -> list[dict]:
         if not self.enabled or not self.consumer:
             return []
-        records = self.consumer.poll(timeout_ms=50, max_records=10)
+        records = self.consumer.poll(timeout_ms=50, max_records=self.action_batch_size)
         return [record.value for batch in records.values() for record in batch]
 
     def commit_actions(self):

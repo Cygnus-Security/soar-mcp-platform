@@ -1,4 +1,6 @@
+import asyncio
 import json
+import os
 from app.mcp_client import MCPClient
 from app.ai_engine import AIEngine
 from app.response_engine import ResponseEngine
@@ -23,6 +25,14 @@ class SOAROrchestrator:
         self.ai_engine       = AIEngine()
         self.response_engine = ResponseEngine()
         self.kafka_bridge     = KafkaBridge()
+        self.action_delay_seconds = self._bounded_delay_ms() / 1000
+
+    def _bounded_delay_ms(self) -> int:
+        try:
+            value = int(os.getenv("SOAR_ACTION_DELAY_MS", "100"))
+        except ValueError:
+            value = 100
+        return max(0, min(10000, value))
 
     async def _call(self, client: MCPClient, tool: str, payload: dict) -> dict:
         result = await client.call_tool(tool, payload)
@@ -203,9 +213,16 @@ class SOAROrchestrator:
 
     async def process_approved_actions(self):
         requests = self.kafka_bridge.poll_approved_actions()
-        for request in requests:
+        for index, request in enumerate(requests, start=1):
             result = await self.response_engine.execute_approved_action(request)
             self.kafka_bridge.publish_action_result(request, result)
+            print(
+                f"[ACTION] {index}/{len(requests)} "
+                f"action_id={request.get('action_id', '?')} "
+                f"status={result.get('status', 'FAILED')}"
+            )
+            if index < len(requests) and self.action_delay_seconds > 0:
+                await asyncio.sleep(self.action_delay_seconds)
         if requests:
             self.kafka_bridge.commit_actions()
         return len(requests)
