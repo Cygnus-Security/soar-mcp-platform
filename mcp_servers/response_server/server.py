@@ -5,9 +5,11 @@ import hmac
 import json
 import os
 import threading
+import time
 import uuid
 import requests
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlsplit
 
 mcp = FastMCP("response-server")
 
@@ -29,6 +31,37 @@ AUTO_ACTIONS = {
 ACTION_WEBHOOK_URL = os.environ.get("SOAR_ACTION_WEBHOOK_URL", "")
 ACTION_WEBHOOK_TOKEN = os.environ.get("SOAR_ACTION_WEBHOOK_TOKEN", "")
 _audit_lock = threading.Lock()
+
+
+def _action_log(event: str, request: dict | None = None, **fields) -> None:
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "component": "response_server",
+        "event": event,
+    }
+    if isinstance(request, dict):
+        for key in ("action_id", "incident_id", "action_type", "target"):
+            value = request.get(key)
+            if value not in (None, ""):
+                record[key] = value
+    record.update({key: value for key, value in fields.items() if value is not None})
+    print(f"[SOAR_RESPONSE] {json.dumps(record, separators=(',', ':'), default=str)}", flush=True)
+
+
+def _safe_gateway_endpoint() -> str:
+    try:
+        parsed = urlsplit(ACTION_WEBHOOK_URL)
+        host = parsed.hostname or "unknown"
+        port = f":{parsed.port}" if parsed.port else ""
+        return f"{parsed.scheme}://{host}{port}{parsed.path}"
+    except Exception:
+        return "configured-webhook"
+
+
+def _response_excerpt(response: requests.Response | None) -> str:
+    if response is None:
+        return ""
+    return response.text.replace("\n", " ")[:500]
 
 
 def _decoded_token(token: str) -> tuple[list[str], str]:
@@ -74,21 +107,40 @@ def _write_audit(entry: dict):
 
 
 def _execute_adapter(action_id: str, action_type: str, target: str, context: dict) -> dict:
+    request_context = {
+        "action_id": action_id,
+        "incident_id": context.get("incident_id"),
+        "action_type": action_type,
+        "target": target,
+    }
+    started = time.monotonic()
+    _action_log("adapter_started", request_context, execution_mode=EXECUTION_MODE)
     if EXECUTION_MODE != "live":
+        _action_log("adapter_dry_run", request_context)
         return {
             "status": "DRY_RUN",
             "message": f"Validated {action_type} for {target}; no infrastructure change was made",
             "execution_mode": EXECUTION_MODE,
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
         }
     if not ACTION_WEBHOOK_URL:
+        _action_log("adapter_configuration_missing", request_context, missing="SOAR_ACTION_WEBHOOK_URL")
         return {
             "status": "FAILED",
             "message": f"No live adapter configured for {action_type}",
             "execution_mode": EXECUTION_MODE,
+            "duration_ms": round((time.monotonic() - started) * 1000, 2),
         }
     headers = {"Content-Type": "application/json"}
     if ACTION_WEBHOOK_TOKEN:
         headers["Authorization"] = f"Bearer {ACTION_WEBHOOK_TOKEN}"
+    safe_context = {
+        key: value for key, value in context.items()
+        if key != "approval_token"
+    }
+    endpoint = _safe_gateway_endpoint()
+    _action_log("gateway_request_started", request_context, endpoint=endpoint, timeout_seconds=15)
+    response = None
     try:
         response = requests.post(
             ACTION_WEBHOOK_URL,
@@ -97,22 +149,60 @@ def _execute_adapter(action_id: str, action_type: str, target: str, context: dic
                 "action_id": action_id,
                 "action_type": action_type,
                 "target": target,
-                "context": context,
+                "context": safe_context,
             },
             timeout=15,
         )
+        duration_ms = round((time.monotonic() - started) * 1000, 2)
+        response_body = _response_excerpt(response)
+        _action_log(
+            "gateway_response_received",
+            request_context,
+            endpoint=endpoint,
+            http_status=response.status_code,
+            duration_ms=duration_ms,
+            response=response_body,
+        )
         response.raise_for_status()
+        try:
+            response_payload = response.json()
+        except ValueError:
+            response_payload = {}
         return {
             "status": "EXECUTED",
-            "message": f"{action_type} completed by action gateway",
+            "message": response_payload.get("message", f"{action_type} completed by action gateway"),
             "execution_mode": EXECUTION_MODE,
             "adapter_status": response.status_code,
+            "adapter_response": response_payload,
+            "duration_ms": duration_ms,
         }
-    except Exception as error:
+    except requests.RequestException as error:
+        duration_ms = round((time.monotonic() - started) * 1000, 2)
+        response_body = _response_excerpt(response)
+        http_status = response.status_code if response is not None else None
+        if http_status is not None:
+            message = f"Action gateway failed: HTTP {http_status}"
+            if response_body:
+                message += f" - {response_body}"
+        else:
+            message = f"Action gateway failed: {error}"
+        _action_log(
+            "gateway_request_failed",
+            request_context,
+            endpoint=endpoint,
+            http_status=http_status,
+            duration_ms=duration_ms,
+            error_type=type(error).__name__,
+            error=str(error)[:500],
+            response=response_body,
+        )
         return {
             "status": "FAILED",
-            "message": f"Action gateway failed: {error}",
+            "message": message,
             "execution_mode": EXECUTION_MODE,
+            "adapter_status": http_status,
+            "adapter_response": response_body,
+            "duration_ms": duration_ms,
         }
 
 
@@ -239,16 +329,29 @@ def execute_active_response(source_ip: str, session_stage: str, metrics: str) ->
 @mcp.tool()
 def execute_approved_action(action_request: str) -> dict:
     """Validate a single-use DSS approval and execute only allowlisted actions."""
+    started = time.monotonic()
+    stage = "decode_request"
+    request = {}
     try:
         request = json.loads(action_request) if isinstance(action_request, str) else action_request
+        _action_log("action_received", request, execution_mode=EXECUTION_MODE)
+        stage = "validate_approval"
         _validate_approval(request)
+        _action_log("approval_validated", request, expires_at=request.get("expires_at"))
+        stage = "idempotency_check"
         if _already_processed(request["action_id"]):
+            _action_log(
+                "action_duplicate_ignored",
+                request,
+                duration_ms=round((time.monotonic() - started) * 1000, 2),
+            )
             return {
                 "status": "EXECUTED",
                 "message": "Action was already processed; duplicate request ignored",
                 "idempotent_replay": True,
             }
 
+        stage = "execute_adapter"
         adapter_result = _execute_adapter(
             request["action_id"], request["action_type"], request["target"], request
         )
@@ -263,9 +366,32 @@ def execute_approved_action(action_request: str) -> dict:
             "timestamp": now_vn(),
             "adapter": adapter_result,
         }
+        stage = "write_audit"
         _write_audit(result)
+        _action_log(
+            "action_audit_written",
+            request,
+            audit_file=AUDIT_FILE,
+            status=result["status"],
+        )
+        _action_log(
+            "action_completed",
+            request,
+            status=result["status"],
+            execution_mode=EXECUTION_MODE,
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            message=result["message"][:500],
+        )
         return result
     except Exception as error:
+        _action_log(
+            "action_failed",
+            request,
+            stage=stage,
+            duration_ms=round((time.monotonic() - started) * 1000, 2),
+            error_type=type(error).__name__,
+            error=str(error)[:500],
+        )
         return {"status": "FAILED", "message": str(error), "timestamp": now_vn()}
 
 

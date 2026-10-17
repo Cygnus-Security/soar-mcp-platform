@@ -1,10 +1,13 @@
 import asyncio
 import json
 import os
+import time
+import uuid
 from app.mcp_client import MCPClient
 from app.ai_engine import AIEngine
 from app.response_engine import ResponseEngine
 from app.kafka_bridge import KafkaBridge
+from app.action_log import action_log
 
 
 class SOAROrchestrator:
@@ -213,18 +216,77 @@ class SOAROrchestrator:
 
     async def process_approved_actions(self):
         requests = self.kafka_bridge.poll_approved_actions()
+        if not requests:
+            return 0
+
+        batch_id = uuid.uuid4().hex[:12]
+        batch_started = time.monotonic()
+        status_counts = {}
+        action_log(
+            "batch_polled",
+            batch_id=batch_id,
+            action_count=len(requests),
+            configured_delay_ms=int(self.action_delay_seconds * 1000),
+        )
         for index, request in enumerate(requests, start=1):
-            result = await self.response_engine.execute_approved_action(request)
-            self.kafka_bridge.publish_action_result(request, result)
-            print(
-                f"[ACTION] {index}/{len(requests)} "
-                f"action_id={request.get('action_id', '?')} "
-                f"status={result.get('status', 'FAILED')}"
+            action_started = time.monotonic()
+            action_log(
+                "action_started",
+                request,
+                batch_id=batch_id,
+                sequence=index,
+                batch_size=len(requests),
             )
+            result = await self.response_engine.execute_approved_action(request)
+            duration_ms = round((time.monotonic() - action_started) * 1000, 2)
+            status = result.get("status", "FAILED")
+            status_counts[status] = status_counts.get(status, 0) + 1
+            action_log(
+                "action_execution_finished",
+                request,
+                batch_id=batch_id,
+                sequence=index,
+                status=status,
+                execution_mode=result.get("execution_mode"),
+                duration_ms=duration_ms,
+                message=str(result.get("message", ""))[:500],
+            )
+            try:
+                self.kafka_bridge.publish_action_result(request, result)
+                action_log(
+                    "action_result_published",
+                    request,
+                    batch_id=batch_id,
+                    sequence=index,
+                    status=status,
+                )
+            except Exception as error:
+                action_log(
+                    "action_result_publish_failed",
+                    request,
+                    batch_id=batch_id,
+                    sequence=index,
+                    status=status,
+                    error_type=type(error).__name__,
+                    error=str(error)[:500],
+                )
+                raise
             if index < len(requests) and self.action_delay_seconds > 0:
+                action_log(
+                    "action_throttled",
+                    request,
+                    batch_id=batch_id,
+                    delay_ms=int(self.action_delay_seconds * 1000),
+                )
                 await asyncio.sleep(self.action_delay_seconds)
-        if requests:
-            self.kafka_bridge.commit_actions()
+        self.kafka_bridge.commit_actions()
+        action_log(
+            "batch_committed",
+            batch_id=batch_id,
+            action_count=len(requests),
+            statuses=status_counts,
+            duration_ms=round((time.monotonic() - batch_started) * 1000, 2),
+        )
         return len(requests)
 
     async def process_alert(self, alert: dict) -> dict:

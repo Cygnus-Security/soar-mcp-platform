@@ -1,6 +1,8 @@
 import asyncio
+import io
 import os
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 from app.kafka_bridge import bounded_int_env
@@ -14,9 +16,9 @@ class FakeKafkaBridge:
 
     def poll_approved_actions(self):
         return [
-            {"action_id": "action-1"},
-            {"action_id": "action-2"},
-            {"action_id": "action-3"},
+            {"action_id": "action-1", "approval_token": "must-not-appear"},
+            {"action_id": "action-2", "approval_token": "must-not-appear"},
+            {"action_id": "action-3", "approval_token": "must-not-appear"},
         ]
 
     def publish_action_result(self, request, result):
@@ -58,7 +60,9 @@ class ApprovedActionProcessingTest(unittest.IsolatedAsyncioTestCase):
         orchestrator.response_engine = FakeResponseEngine(events)
         orchestrator.action_delay_seconds = 0
 
-        processed = await orchestrator.process_approved_actions()
+        output = io.StringIO()
+        with redirect_stdout(output):
+            processed = await orchestrator.process_approved_actions()
 
         self.assertEqual(3, processed)
         self.assertEqual(1, orchestrator.response_engine.max_in_flight)
@@ -71,6 +75,12 @@ class ApprovedActionProcessingTest(unittest.IsolatedAsyncioTestCase):
             ],
             events,
         )
+        logs = output.getvalue()
+        self.assertIn('"event":"batch_polled"', logs)
+        self.assertIn('"event":"action_started"', logs)
+        self.assertIn('"event":"action_execution_finished"', logs)
+        self.assertIn('"event":"batch_committed"', logs)
+        self.assertNotIn("must-not-appear", logs)
 
 
 if __name__ == "__main__":
